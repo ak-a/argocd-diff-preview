@@ -536,6 +536,9 @@ func (a *ArgoCDInstallation) RefreshApp(appName string) error {
 
 // EnsureArgoCdIsReady waits for ArgoCD deployments to be ready
 func (a *ArgoCDInstallation) EnsureArgoCdIsReady() error {
+	if a.APIOnly() != nil {
+		return a.operations.Login()
+	}
 	timeout := 300 * time.Second
 	// Wait for argocd-server deployment to be ready
 	// Use component label to support nameOverride configurations

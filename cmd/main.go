@@ -174,15 +174,17 @@ func run(cfg *Config) error {
 		}
 	}()
 
-	// create k8s client
-	k8sClient, err := k8s.NewClient(cfg.DisableClientThrottling)
-	if err != nil {
-		log.Error().Err(err).Msgf("❌ Failed to create k8s client")
-		return err
+	// API-only mode must never initialize a Kubernetes client.
+	var k8sClient *k8s.Client
+	if cfg.RenderMethod != RenderMethodServerAPIOnly {
+		k8sClient, err = k8s.NewClient(cfg.DisableClientThrottling)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Delete old applications
-	if !cfg.CreateCluster {
+	if !cfg.CreateCluster && cfg.RenderMethod != RenderMethodServerAPIOnly {
 		ageInMinutes := 20
 		if err := k8sClient.DeleteAllApplicationsOlderThan(cfg.ArgocdNamespace, ageInMinutes); err != nil {
 			log.Error().Msgf("❌ Failed to delete old applications")
@@ -196,20 +198,29 @@ func run(cfg *Config) error {
 		return err
 	}
 
-	argocd := argocd.New(
-		k8sClient,
-		cfg.ArgocdNamespace,
-		cfg.ArgocdChartVersion,
-		cfg.ArgocdChartName,
-		cfg.ArgocdChartURL,
-		cfg.ArgocdChartRepoUsername,
-		cfg.ArgocdChartRepoPassword,
-		cfg.ArgocdLoginOptions,
-		cfg.RenderMethod,
-		cfg.ArgocdAuthToken,
-		cfg.ArgocdConfigPath,
-		cfg.RepoServerAddress,
-	)
+	var installation *argocd.ArgoCDInstallation
+	if cfg.RenderMethod == RenderMethodServerAPIOnly {
+		installation, err = argocd.NewAPIOnly(cfg.ArgocdServer, cfg.ArgocdAuthToken, cfg.ArgocdNamespace, cfg.ArgocdProject, cfg.ArgocdPreviewDestination, cfg.ArgocdCAFile)
+		if err != nil {
+			return err
+		}
+	} else {
+		installation = argocd.New(
+			k8sClient,
+			cfg.ArgocdNamespace,
+			cfg.ArgocdChartVersion,
+			cfg.ArgocdChartName,
+			cfg.ArgocdChartURL,
+			cfg.ArgocdChartRepoUsername,
+			cfg.ArgocdChartRepoPassword,
+			cfg.ArgocdLoginOptions,
+			cfg.RenderMethod,
+			cfg.ArgocdAuthToken,
+			cfg.ArgocdConfigPath,
+			cfg.RepoServerAddress,
+		)
+	}
+	argocd := installation
 
 	// Ensure cleanup is performed when we exit (e.g., stopping port forwards)
 	defer argocd.Cleanup()
@@ -233,12 +244,14 @@ func run(cfg *Config) error {
 	}
 
 	// Start background crash watcher for ArgoCD pods
-	stopCrashWatcher := k8sClient.WatchForContainerRestarts(
-		cfg.ArgocdNamespace,
-		"app.kubernetes.io/part-of=argocd",
-		5*time.Second,
-	)
-	defer close(stopCrashWatcher)
+	if k8sClient != nil {
+		stopCrashWatcher := k8sClient.WatchForContainerRestarts(
+			cfg.ArgocdNamespace,
+			"app.kubernetes.io/part-of=argocd",
+			5*time.Second,
+		)
+		defer close(stopCrashWatcher)
+	}
 
 	// Generate applications from ApplicationSets
 	baseApps, targetApps, convertAppSetsToAppsDuration, err := argoapplication.ConvertAppSetsToAppsInBothBranches(
@@ -318,7 +331,12 @@ func run(cfg *Config) error {
 	var baseManifests, targetManifests []extract.ExtractedApp
 	var extractDuration time.Duration
 
-	if cfg.RenderMethod == RenderMethodRepoServerAPI {
+	switch cfg.RenderMethod {
+	case RenderMethodServerAPIOnly:
+		baseManifests, targetManifests, extractDuration, err = extract.RenderApplicationsViaAPI(
+			argocd.APIOnly(), cfg.Timeout, cfg.Concurrency, baseApps.SelectedApps, targetApps.SelectedApps,
+		)
+	case RenderMethodRepoServerAPI:
 
 		// Extract resources by streaming source files directly to the Argo CD repo server via gRPC.
 		// This bypasses the cluster reconciliation loop used by extract.RenderApplicationsFromBothBranches.
@@ -348,7 +366,7 @@ func run(cfg *Config) error {
 				cfg.RepoSelector,
 			)
 		}
-	} else {
+	default:
 		// Extract resources from the cluster based on each branch, passing the manifests directly
 		deleteAfterProcessing := !cfg.CreateCluster
 		baseManifests, targetManifests, extractDuration, err = extract.RenderApplicationsFromBothBranches(

@@ -4,6 +4,7 @@ package vars
 type RenderMethod string
 
 const (
+	RenderMethodServerAPIOnly RenderMethod = "server-api-only"
 	RenderMethodCLI           RenderMethod = "cli"
 	RenderMethodServerAPI     RenderMethod = "server-api"
 	RenderMethodRepoServerAPI RenderMethod = "repo-server-api"
