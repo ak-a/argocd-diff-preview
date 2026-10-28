@@ -66,7 +66,11 @@ argocd-diff-preview [FLAGS] [OPTIONS] (--repo <repo> | --repo-regex <regex>) --t
 | `--output-folder <folder>`, `-o`          | `OUTPUT_FOLDER`              | `./output`                             | Output folder where the diff will be saved                                                  |
 | `--preinstall-folder <folder>`            | `PREINSTALL_FOLDER`          | `./preinstall`                         | Folder containing Kubernetes manifests to apply before Argo CD is installed                 |
 | `--redirect-target-revisions <revs>`      | `REDIRECT_TARGET_REVISIONS`  | -                                      | Comma-separated source targetRevision values to redirect to the target branch. Example: main,HEAD. By default, every targetRevision in matching repositories is redirected |
-| `--render-method <method>`                | `RENDER_METHOD`              | `server-api`                           | Manifest rendering method. Options: `cli`, `server-api`, `repo-server-api`                  |
+| `--render-method <method>`                | `RENDER_METHOD`              | `server-api`                           | Manifest rendering method. Options: `cli`, `server-api`, `repo-server-api`, `server-api-only`                  |
+| `--argocd-server <url>` | `ARGOCD_SERVER` | - | Verified HTTPS endpoint; requires `server-api-only`. |
+| `--argocd-ca-file <path>` | `ARGOCD_CA_FILE` | - | Additional PEM CA certificates for API-only mode. |
+| `--argocd-project <name>` | `ARGOCD_PROJECT` | `default` | AppProject for API-only preview Applications. |
+| `--argocd-preview-destination <url>` | `ARGOCD_PREVIEW_DESTINATION` | `https://kubernetes.default.svc` | Registered discovery endpoint for API-only previews. |
 | `--repo-regex <regex>`                    | `REPO_REGEX`                 | -                                      | Advanced repository matcher for templated Argo CD repoURL values. Mutually exclusive with `--repo` |
 | `--repo-server-address <address>`                         | `REPO_SERVER_ADDRESS`                      | -                 | Address of the Argo CD repo server (host:port). Connects directly instead of port-forwarding. Requires --render-method=repo-server-api"                                                        |
 | `--secrets-folder <folder>`, `-s`         | `SECRETS_FOLDER`             | `./secrets`                            | Secrets folder where the secrets are read from                                              |

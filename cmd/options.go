@@ -42,6 +42,7 @@ var (
 type RenderMethod = vars.RenderMethod
 
 const (
+	RenderMethodServerAPIOnly = vars.RenderMethodServerAPIOnly
 	RenderMethodCLI           = vars.RenderMethodCLI
 	RenderMethodServerAPI     = vars.RenderMethodServerAPI
 	RenderMethodRepoServerAPI = vars.RenderMethodRepoServerAPI
@@ -94,6 +95,10 @@ var (
 
 // RawOptions holds the raw CLI/env inputs - used only for parsing
 type RawOptions struct {
+	ArgocdServer                         string `mapstructure:"argocd-server"`
+	ArgocdCAFile                         string `mapstructure:"argocd-ca-file"`
+	ArgocdProject                        string `mapstructure:"argocd-project"`
+	ArgocdPreviewDestination             string `mapstructure:"argocd-preview-destination"`
 	Debug                                bool   `mapstructure:"debug"`
 	DryRun                               bool   `mapstructure:"dry-run"`
 	Timeout                              uint64 `mapstructure:"timeout"`
@@ -148,6 +153,10 @@ type RawOptions struct {
 
 // Config is the final, validated, ready-to-use configuration
 type Config struct {
+	ArgocdServer             string
+	ArgocdCAFile             string
+	ArgocdProject            string
+	ArgocdPreviewDestination string
 	// Direct passthrough fields
 	Debug                                bool
 	DryRun                               bool
@@ -278,6 +287,8 @@ func Parse() *Config {
 	viper.SetDefault("argocd-login-options", DefaultArgocdLoginOptions)
 	viper.SetDefault("argocd-auth-token", DefaultArgocdAuthToken)
 	viper.SetDefault("render-method", DefaultRenderMethod)
+	viper.SetDefault("argocd-project", "default")
+	viper.SetDefault("argocd-preview-destination", "https://kubernetes.default.svc")
 	viper.SetDefault("log-format", DefaultLogFormat)
 	viper.SetDefault("title", DefaultTitle)
 	viper.SetDefault("dry-run", DefaultDryRun)
@@ -312,6 +323,10 @@ func Parse() *Config {
 	rootCmd.Flags().String("argocd-chart-url", DefaultArgocdChartURL, "Argo CD Helm Chart URL")
 	rootCmd.Flags().String("argocd-chart-repo-username", DefaultArgocdChartRepoUsername, "Argo CD Helm Repo User Name")
 	rootCmd.Flags().String("argocd-chart-repo-password", DefaultArgocdChartRepoPassword, "Argo CD Helm Repo Password")
+	rootCmd.Flags().String("argocd-server", "", "HTTPS URL of a dedicated Argo CD preview server; requires server-api-only")
+	rootCmd.Flags().String("argocd-ca-file", "", "Additional PEM CA certificates for the API-only HTTPS connection")
+	rootCmd.Flags().String("argocd-project", "default", "AppProject used by API-only preview Applications")
+	rootCmd.Flags().String("argocd-preview-destination", "https://kubernetes.default.svc", "Registered discovery-only destination used by API-only previews")
 	rootCmd.Flags().String("argocd-auth-token", DefaultArgocdAuthToken, "Argo CD Auth Token for API access")
 	rootCmd.Flags().String("argocd-login-options", DefaultArgocdLoginOptions, "Additional options to pass to 'argocd login' command")
 	rootCmd.Flags().String("argocd-config-dir", DefaultArgocdConfigPath, "Path to the Argo CD config folder (contains values.yaml for Helm chart customization)")
@@ -328,7 +343,7 @@ func Parse() *Config {
 
 	// Cluster related
 	rootCmd.Flags().Bool("create-cluster", DefaultCreateCluster, "Create a new cluster if it doesn't exist")
-	rootCmd.Flags().String("render-method", DefaultRenderMethod, "Render mode for Argo CD manifests. Options: cli, server-api, repo-server-api. Takes precedence over --use-argocd-api")
+	rootCmd.Flags().String("render-method", DefaultRenderMethod, "Render mode for Argo CD manifests. Options: cli, server-api, repo-server-api, server-api-only. Takes precedence over --use-argocd-api")
 	rootCmd.Flags().String("cluster", DefaultCluster, "Local cluster tool. Options: kind, minikube, k3d, auto")
 	rootCmd.Flags().String("cluster-name", DefaultClusterName, "Cluster name (only for kind & k3d)")
 	rootCmd.Flags().String("kind-options", DefaultKindOptions, "kind options (only for kind)")
@@ -402,6 +417,10 @@ func (o *RawOptions) checkRequired() []string {
 // ToConfig converts RawOptions to a validated Config
 func (o *RawOptions) ToConfig() (*Config, error) {
 	cfg := &Config{
+		ArgocdServer:             o.ArgocdServer,
+		ArgocdCAFile:             o.ArgocdCAFile,
+		ArgocdProject:            o.ArgocdProject,
+		ArgocdPreviewDestination: o.ArgocdPreviewDestination,
 		// Direct passthrough fields
 		Debug:                                o.Debug,
 		DryRun:                               o.DryRun,
@@ -461,6 +480,23 @@ func (o *RawOptions) ToConfig() (*Config, error) {
 	cfg.RenderMethod, err = o.parseRenderMethod()
 	if err != nil {
 		return nil, fmt.Errorf("invalid render-method: %w", err)
+	}
+
+	if cfg.RenderMethod == RenderMethodServerAPIOnly {
+		if cfg.CreateCluster {
+			return nil, fmt.Errorf("server-api-only requires --create-cluster=false")
+		}
+		if cfg.ArgocdServer == "" || cfg.ArgocdAuthToken == "" {
+			return nil, fmt.Errorf("server-api-only requires --argocd-server and --argocd-auth-token (or ARGOCD_AUTH_TOKEN)")
+		}
+		if cfg.ArgocdProject == "" {
+			cfg.ArgocdProject = "default"
+		}
+		if cfg.ArgocdPreviewDestination == "" {
+			cfg.ArgocdPreviewDestination = "https://kubernetes.default.svc"
+		}
+	} else if cfg.ArgocdServer != "" || cfg.ArgocdCAFile != "" {
+		return nil, fmt.Errorf("--argocd-server and --argocd-ca-file require --render-method=server-api-only")
 	}
 
 	// Parse file regex
@@ -609,6 +645,8 @@ func (o *RawOptions) parseRedirectRevisions() []string {
 // --render-method takes precedence over --use-argocd-api.
 func (o *RawOptions) parseRenderMethod() (RenderMethod, error) {
 	switch RenderMethod(strings.ToLower(o.RenderMethod)) {
+	case RenderMethodServerAPIOnly:
+		return RenderMethodServerAPIOnly, nil
 	case RenderMethodCLI:
 		return RenderMethodCLI, nil
 	case RenderMethodServerAPI:
@@ -616,7 +654,7 @@ func (o *RawOptions) parseRenderMethod() (RenderMethod, error) {
 	case RenderMethodRepoServerAPI:
 		return RenderMethodRepoServerAPI, nil
 	default:
-		return "", fmt.Errorf("unsupported render-method %q: must be one of cli, server-api, repo-server-api", o.RenderMethod)
+		return "", fmt.Errorf("unsupported render-method %q: must be one of cli, server-api, repo-server-api, server-api-only", o.RenderMethod)
 	}
 }
 

@@ -515,14 +515,18 @@ func (a *APIOperations) AddSourceNamespaceToDefaultAppProject() error {
 // CheckVersionCompatibility compares the ArgoCD library version (from go.mod)
 // against the ArgoCD server version.
 func (a *APIOperations) CheckVersionCompatibility() error {
-	libVersion := getArgoCDLibVersion()
-	if libVersion == "unknown" {
-		return fmt.Errorf("failed to determine ArgoCD library version from build info")
-	}
-
 	serverVersion, err := a.getServerVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get server version: %w", err)
+	}
+
+	return checkServerVersionCompatibility(serverVersion)
+}
+
+func checkServerVersionCompatibility(serverVersion string) error {
+	libVersion := getArgoCDLibVersion()
+	if libVersion == "unknown" {
+		return fmt.Errorf("failed to determine ArgoCD library version from build info")
 	}
 
 	log.Debug().Msgf("Argo CD Version: [Lib: '%s', Server: '%s']", libVersion, serverVersion)
